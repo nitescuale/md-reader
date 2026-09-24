@@ -20,29 +20,29 @@
     "#1": {
       "0000": {
         "fixed": {
-          "file_version": "1.0.1.0",
-          "product_version": "1.0.1.0"
+          "file_version": "1.0.2.0",
+          "product_version": "1.0.2.0"
         },
         "info": {
           "0409": {
             "Comments": "Portable Markdown reader (RichEdit based)",
             "FileDescription": "Portable Markdown reader",
-            "FileVersion": "1.0.1.0",
+            "FileVersion": "1.0.2.0",
             "InternalName": "MdReader",
             "LegalCopyright": "Alex",
             "OriginalFilename": "MdReader.exe",
             "ProductName": "MdReader",
-            "ProductVersion": "1.0.1.0"
+            "ProductVersion": "1.0.2.0"
           },
           "040C": {
             "Comments": "Liseuse Markdown portable (basee sur RichEdit)",
             "FileDescription": "Liseuse Markdown portable",
-            "FileVersion": "1.0.1.0",
+            "FileVersion": "1.0.2.0",
             "InternalName": "MdReader",
             "LegalCopyright": "Alex",
             "OriginalFilename": "MdReader.exe",
             "ProductName": "MdReader",
-            "ProductVersion": "1.0.1.0"
+            "ProductVersion": "1.0.2.0"
           }
         }
       }

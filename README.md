@@ -91,8 +91,9 @@ Il existe deux variantes de l'exécutable :
 
 Trois méthodes sont essayées dans l'ordre, de la plus sûre à la plus risquée :
 
-1. **`WM_SETTEXT` avec le RTF** — Windows interprète le RTF quand la chaîne commence par `{\rtf`.
-   Aucun rappel vers le code Go : c'est la méthode la plus robuste, et celle utilisée en priorité.
+1. **`EM_SETTEXTEX` avec le RTF** — l'API prévue pour remettre du RTF sous forme de chaîne
+   (RichEdit le lit avec son lecteur RTF dès que le texte commence par `{\rtf`). Aucun rappel vers
+   le code Go : c'est la méthode la plus robuste, et celle utilisée en priorité.
 2. **`EM_STREAMIN`** — la méthode classique, qui passe par un callback. Si la première méthode a
    échoué, celle-ci est tentée à son tour.
 3. **Texte brut** — en dernier recours, le document est affiché en texte lisible (sans les marqueurs
@@ -115,3 +116,4 @@ fichier si besoin (clic droit → Propriétés → *Débloquer*).
 - Pas encore de recherche dans le document (`Ctrl+F`), ni d'impression.
 - HTML brut dans le markdown : les balises sont retirées, pas interprétées.
 - Windows 10 minimum (manifeste per-monitor v2, contrôles v6).
+- Le thème sombre demande à Windows des menus et une barre de titre sombres (astuce `uxtheme`).

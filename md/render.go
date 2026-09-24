@@ -77,6 +77,9 @@ type Options struct {
 	// WidthTwips is the usable width of the RichEdit control, used to lay out
 	// tables. 1440 twips = 1 inch.
 	WidthTwips int
+	// PadTwips is the left and right margin applied to every block, used to
+	// keep a comfortable measure on wide windows. 0 = no margin.
+	PadTwips int
 }
 
 // LinkSpan is a clickable range of the rendered text.
@@ -182,7 +185,7 @@ func Render(src string, opt Options) Result {
 	e.header()
 	lines := splitLines(normalize(src))
 	lines = stripFrontMatter(lines)
-	e.blocks(lines, blockCtx{})
+	e.blocks(lines, blockCtx{li: opt.PadTwips, ri: opt.PadTwips})
 	e.ctrl("}")
 	return Result{RTF: e.sb.String(), Text: string(e.mir), Links: e.links}
 }
@@ -193,7 +196,7 @@ func (e *emitter) header() {
 	e.ctrl(`{\fonttbl` +
 		`{\f0\fnil\fcharset0 Segoe UI;}` +
 		`{\f1\fmodern\fcharset0 Consolas;}` +
-		`{\f2\fnil\fcharset0 Segoe UI Symbol;}` +
+		`{\f2\fnil\fcharset0 Segoe UI Emoji;}` +
 		`}` + "\n")
 	e.ctrl(`{\colortbl ;` +
 		hexToRTF(t.Text) + hexToRTF(t.Muted) + hexToRTF(t.Link) + hexToRTF(t.CodeText) +
@@ -573,7 +576,7 @@ func (e *emitter) heading(level int, text string, ctx blockCtx) {
 }
 
 func (e *emitter) paragraph(text string, ctx blockCtx) {
-	p := pstyle{font: fontUI, size: e.sz(22), color: cfText, sa: 140}
+	p := pstyle{font: fontUI, size: e.sz(22), color: cfText, sa: 170, sl: 264}
 	if ctx.quote {
 		p.bar = true
 		p.bcolor = cfQuoteBar

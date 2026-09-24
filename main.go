@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	appVersion = "1.0.1"
+	appVersion = "1.0.2"
 	wndClass   = "MdReaderMainWindow"
 	editClass  = "RICHEDIT50W"
 
@@ -69,6 +69,7 @@ const (
 // ------------------------------------------------------------------- state
 
 type App struct {
+	padPx int // marge intérieure courante (pixels)
 	skipStream bool // EM_STREAMIN a tué le process au démarrage précédent
 	hwnd   HWND
 	edit   HWND
@@ -197,6 +198,8 @@ func main() {
 	registerClass()
 	step("création de la fenêtre")
 	app.createWindow()
+	applyDarkChrome(app.dark)
+
 	step("construction des menus")
 	app.buildMenu()
 	step("raccourcis clavier")
@@ -589,6 +592,32 @@ func (a *App) applyColors() {
 	invalidate(a.hwnd)
 }
 
+// ------------------------------------------------------------ thème système
+
+// applyDarkChrome asks Windows for dark menus and title bar (Undocumented but
+// widespread trick: SetPreferredAppMode in uxtheme). Every call is optional and
+// silently ignored when the running Windows does not provide it.
+func applyDarkChrome(dark bool) {
+	if !dark {
+		return
+	}
+	uxtheme := syscall.NewLazyDLL("uxtheme.dll")
+	mode := uintptr(2) // AllowDark
+	if h, _, _ := kernel32.NewProc("GetModuleHandleW").Call(uintptr(unsafe.Pointer(utf16Ptr("uxtheme.dll")))); h != 0 {
+		if pGa, _, _ := kernel32.NewProc("GetProcAddress").Call(h, 135); pGa != 0 {
+			syscall.SyscallN(pGa, mode)
+		}
+		if pGa, _, _ := kernel32.NewProc("GetProcAddress").Call(h, 136); pGa != 0 {
+			syscall.SyscallN(pGa)
+		}
+	}
+	if app.status != 0 {
+		if p := uxtheme.NewProc("SetWindowTheme"); p.Find() == nil {
+			p.Call(app.status, uintptr(unsafe.Pointer(utf16Ptr("DarkMode_Explorer"))), 0)
+		}
+	}
+}
+
 func invalidate(h HWND) {
 	user32.NewProc("InvalidateRect").Call(h, 0, 1)
 }
@@ -732,8 +761,23 @@ func (a *App) renderRead() {
 	if w <= 0 {
 		w = a.px(900)
 	}
-	tw := int(float64(w-2*a.px(18)-a.px(20)) * 1440 / float64(a.dpi()))
-	res, ok := safeRender(a.raw, md.Options{Theme: t, Scale: a.scale, WidthTwips: tw})
+	// keep a comfortable reading measure: on a wide window the text is a
+	// centred column instead of edge-to-edge lines
+	side := a.px(18)
+	a.padPx = side
+	maxCol := a.px(820)
+	if w-2*side > maxCol {
+		side = (w - maxCol) / 2
+	}
+	colPx := w - 2*side - a.px(20)
+	if colPx < a.px(320) {
+		colPx = a.px(320)
+		side = a.px(18)
+	}
+	a.padPx = side
+	tw := int(float64(colPx) * 1440 / float64(a.dpi()))
+	padTw := int(float64(side) * 1440 / float64(a.dpi()))
+	res, ok := safeRender(a.raw, md.Options{Theme: t, Scale: a.scale, WidthTwips: tw, PadTwips: padTw})
 	if !ok {
 		res = md.Result{Text: a.raw}
 	}
@@ -743,9 +787,20 @@ func (a *App) renderRead() {
 
 	a.busy = true
 	a.setReadOnly(true)
+	// the background must follow the theme in every display mode: without
+	// this, a dark-theme text colour would land on the default white control
+	a.applyColors()
 
-	switch a.loadRich(res.RTF) {
-	case rmSetText, rmStream:
+	mode := a.loadRich(res.RTF)
+	// the rich rendering carries its own margins inside the RTF, the plain
+	// fallback needs them set on the control
+	if mode == rmPlain {
+		a.applyMargins(a.padPx)
+	} else {
+		a.applyMargins(a.px(6))
+	}
+	switch mode {
+	case rmSetTextEx, rmStream:
 		pSendMessageW.Call(a.edit, emSetModify, 0, 0)
 		pSendMessageW.Call(a.edit, emEmptyUndoBuf, 0, 0)
 		a.applyColors()
@@ -757,7 +812,7 @@ func (a *App) renderRead() {
 		if text == "" {
 			text = a.raw
 		}
-		a.setEditorTextValue(text)
+		a.setBodyText(text)
 		a.updateStatus("Rendu enrichi indisponible — texte brut (voir mdreader-log.txt)")
 	}
 	a.busy = false
@@ -766,10 +821,16 @@ func (a *App) renderRead() {
 
 // render modes, from the least risky to the most risky
 const (
-	rmPlain   = 0 // plain text, always works
-	rmSetText = 1 // WM_SETTEXT with RTF: no callback into Go
-	rmStream  = 2 // EM_STREAMIN: needs a Go callback
+	rmPlain     = 0 // plain text, always works
+	rmSetTextEx = 3 // EM_SETTEXTEX with RTF: no callback into Go
+	rmStream    = 2 // EM_STREAMIN: needs a Go callback
 )
+
+// setTextEx is the SETTEXTEX structure used by EM_SETTEXTEX.
+type setTextEx struct {
+	Flags    uint32
+	Codepage uint32
+}
 
 // loadRich tries every way of getting the rich text into the control and
 // remembers the one that works, so a method that kills the process on this
@@ -778,14 +839,14 @@ func (a *App) loadRich(rtf string) int {
 	if rtf == "" {
 		return rmPlain
 	}
-	order := []int{rmSetText, rmStream}
+	order := []int{rmSetTextEx, rmStream}
 	if a.skipStream {
-		order = []int{rmSetText}
+		order = []int{rmSetTextEx}
 	}
-	if a.cfg.RenderMode == rmSetText || a.cfg.RenderMode == rmStream {
+	if a.cfg.RenderMode == rmSetTextEx || a.cfg.RenderMode == rmStream {
 		// remembered from a previous run: start with it, then the others
 		order = []int{a.cfg.RenderMode}
-		for _, m := range []int{rmSetText, rmStream} {
+		for _, m := range []int{rmSetTextEx, rmStream} {
 			if m != a.cfg.RenderMode {
 				if m == rmStream && a.skipStream {
 					continue
@@ -797,8 +858,8 @@ func (a *App) loadRich(rtf string) int {
 	for _, m := range order {
 		var ok bool
 		switch m {
-		case rmSetText:
-			ok = a.trySetTextRTF(rtf)
+		case rmSetTextEx:
+			ok = a.trySetTextEx(rtf)
 		case rmStream:
 			ok = a.streamRTF(rtf)
 		}
@@ -814,30 +875,33 @@ func (a *App) loadRich(rtf string) int {
 	return rmPlain
 }
 
-// trySetTextRTF pushes the RTF through WM_SETTEXT. No callback into Go is
-// involved, so this cannot hit the runtime bug that EM_STREAMIN can.
-func (a *App) trySetTextRTF(rtf string) (ok bool) {
+// trySetTextEx pushes the RTF through EM_SETTEXTEX, which is the documented way
+// of handing RTF to the control as a string: the control reads it with its RTF
+// reader when the text starts with {\rtf. No callback into Go is involved, so
+// this cannot hit the runtime bug that EM_STREAMIN can.
+func (a *App) trySetTextEx(rtf string) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			logf("PANIC pendant WM_SETTEXT: %v", r)
+			logf("PANIC pendant EM_SETTEXTEX: %v", r)
 			ok = false
 		}
 	}()
-	pSendMessageW.Call(a.edit, wmSetText, 0, uintptr(unsafe.Pointer(utf16Ptr(rtf))))
+	// the RTF stream is pure ASCII (every non-ASCII character is written as a
+	// \uNNNN? escape), so it can be handed over as an ANSI string
+	buf := append([]byte(rtf), 0)
+	ste := setTextEx{Flags: 0 /* ST_DEFAULT */, Codepage: 1252}
+	r, _, _ := pSendMessageW.Call(a.edit, EM_SETTEXTEX,
+		uintptr(unsafe.Pointer(&ste)), uintptr(unsafe.Pointer(&buf[0])))
 	txt := a.controlText()
 	head := txt
 	if len(head) > 40 {
 		head = head[:40]
 	}
-	if strings.Contains(head, `{\rtf`) {
-		logf("WM_SETTEXT: RTF non interprété (texte brut affiché)")
+	if r == 0 || strings.Contains(head, `{\rtf`) || len(txt) < 2 {
+		logf("EM_SETTEXTEX: échec (retour=%d, %d caractères)", r, len(txt))
 		return false
 	}
-	if len(txt) < 2 {
-		logf("WM_SETTEXT: contrôle vide après chargement")
-		return false
-	}
-	logf("WM_SETTEXT: RTF interprété (%d caractères)", len(txt))
+	logf("EM_SETTEXTEX: RTF interprété (%d caractères)", len(txt))
 	return true
 }
 
@@ -893,6 +957,14 @@ func (a *App) setReadOnly(on bool) {
 
 func (a *App) setEditorText() {
 	a.setEditorTextValue(a.raw)
+	a.applyEditorFormat()
+}
+
+// setBodyText displays readable prose (the plain-text fallback) in the UI font
+// rather than in the monospace font used for the markdown source.
+func (a *App) setBodyText(value string) {
+	a.setEditorTextValue(value)
+	a.applyBodyFormat()
 }
 
 // setEditorTextValue displays arbitrary text (used by the plain-text fallback,
@@ -903,8 +975,37 @@ func (a *App) setEditorTextValue(value string) {
 	pSendMessageW.Call(a.edit, wmSetText, 0, uintptr(unsafe.Pointer(utf16Ptr(txt))))
 	pSendMessageW.Call(a.edit, emSetModify, 0, 0)
 	pSendMessageW.Call(a.edit, emEmptyUndoBuf, 0, 0)
-	a.applyEditorFormat()
 	a.busy = false
+}
+
+// applyBodyFormat sets the proportional reading font.
+func (a *App) applyBodyFormat() {
+	t := a.theme()
+	var cf charFormat2W
+	cf.CbSize = uint32(unsafe.Sizeof(cf))
+	cf.DwMask = CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD
+	cf.DwEffects = 0
+	cf.YHeight = int32(10 * 22 * a.scale)
+	cf.CrTextColor = colorRef(t.Text)
+	face := utf16.Encode([]rune("Segoe UI"))
+	for i := 0; i < len(face) && i < len(cf.SzFaceName); i++ {
+		cf.SzFaceName[i] = face[i]
+	}
+	pSendMessageW.Call(a.edit, EM_SETCHARFORMAT, SCF_ALL, uintptr(unsafe.Pointer(&cf)))
+}
+
+const (
+	emSetTextEx = 0x0461 // EM_SETTEXTEX
+	emSetMargins = 0x00D3 // EM_SETMARGINS
+)
+
+// applyMargins sets the left/right inner margin of the control, in pixels.
+func (a *App) applyMargins(px int) {
+	if a.edit == 0 {
+		return
+	}
+	lp := uintptr(px) | uintptr(px)<<16
+	pSendMessageW.Call(a.edit, emSetMargins, EC_LEFTMARGIN|EC_RIGHTMARGIN, lp)
 }
 
 func (a *App) applyEditorFormat() {
