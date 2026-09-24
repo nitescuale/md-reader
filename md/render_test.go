@@ -36,10 +36,10 @@ func TestBalancedBraces(t *testing.T) {
 
 func TestHeadersAndSizes(t *testing.T) {
 	res := render(t, "# H1\n\n## H2\n\npara\n")
-	if !strings.Contains(res.RTF, `\fs34`) {
+	if !strings.Contains(res.RTF, `\fs38`) {
 		t.Errorf("h1 size missing: %s", head(res.RTF))
 	}
-	if !strings.Contains(res.RTF, `\fs28`) {
+	if !strings.Contains(res.RTF, `\fs30`) {
 		t.Errorf("h2 size missing")
 	}
 	if !strings.Contains(res.RTF, `\fs22`) {
@@ -191,7 +191,7 @@ func TestHrAndIndentedCode(t *testing.T) {
 
 func TestScale(t *testing.T) {
 	res := Render("# T\n", Options{Theme: LightTheme(), Scale: 1.5})
-	if !strings.Contains(res.RTF, `\fs51`) {
+	if !strings.Contains(res.RTF, `\fs57`) {
 		t.Errorf("scale not applied: %s", head(res.RTF))
 	}
 }

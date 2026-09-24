@@ -549,10 +549,10 @@ func (e *emitter) heading(level int, text string, ctx blockCtx) {
 		muted        bool
 	}
 	table := map[int]hs{
-		1: {34, 260, 120, false},
-		2: {28, 220, 100, false},
-		3: {24, 190, 80, false},
-		4: {22, 170, 60, false},
+		1: {38, 340, 160, false},
+		2: {30, 280, 120, false},
+		3: {25, 220, 90, false},
+		4: {22, 180, 70, false},
 		5: {21, 150, 60, true},
 		6: {20, 150, 60, true},
 	}
@@ -576,7 +576,7 @@ func (e *emitter) heading(level int, text string, ctx blockCtx) {
 }
 
 func (e *emitter) paragraph(text string, ctx blockCtx) {
-	p := pstyle{font: fontUI, size: e.sz(22), color: cfText, sa: 170, sl: 264}
+	p := pstyle{font: fontUI, size: e.sz(22), color: cfText, sa: 190, sl: 276}
 	if ctx.quote {
 		p.bar = true
 		p.bcolor = cfQuoteBar
@@ -589,7 +589,7 @@ func (e *emitter) paragraph(text string, ctx blockCtx) {
 
 func (e *emitter) codeBlock(lines []string, ctx blockCtx) {
 	for _, l := range lines {
-		p := pstyle{font: fontMono, size: e.sz(19), color: cfCodeText, sl: 240, li: 240, ri: 240}
+		p := pstyle{font: fontMono, size: e.sz(19), color: cfCodeText, sl: 250, li: 300, ri: 300}
 		if ctx.quote {
 			p.bar = true
 			p.bcolor = cfQuoteBar
@@ -891,7 +891,7 @@ func (e *emitter) table(lines []string, start int, ctx blockCtx) int {
 		`\clbrdrr\brdrs\brdrw5\brdrcf` + itoa(cfBorder)
 
 	emitRow := func(cells []string, isHeader bool) {
-		e.ctrl(`\trowd\trgaph60\trleft` + itoa(ctx.li) + `\trbrdrt\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
+		e.ctrl(`\trowd\trgaph120\trleft` + itoa(ctx.li) + `\trbrdrt\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
 			`\trbrdrl\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
 			`\trbrdrb\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
 			`\trbrdrr\brdrs\brdrw5\brdrcf` + itoa(cfBorder) + "\n")

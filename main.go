@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	appVersion = "1.0.2"
+	appVersion = "1.0.3"
 	wndClass   = "MdReaderMainWindow"
 	editClass  = "RICHEDIT50W"
 
@@ -70,7 +70,7 @@ const (
 
 type App struct {
 	padPx int // marge intérieure courante (pixels)
-	skipStream bool // EM_STREAMIN a tué le process au démarrage précédent
+	streamAllowed bool // EM_STREAMIN activé explicitement (il peut tuer le process)
 	hwnd   HWND
 	edit   HWND
 	status HWND
@@ -167,6 +167,9 @@ func main() {
 				dumpRTF(args[i+1], args[i+2], contains(args[i:], "--dark"))
 			}
 			return
+		case "--stream":
+			app.streamAllowed = true
+			logf("EM_STREAMIN activé par --stream")
 		case "--selftest":
 			selftest()
 			return
@@ -174,12 +177,6 @@ func main() {
 			help(args)
 			return
 		}
-	}
-
-	if _, err := os.Stat(renderMarkerPath()); err == nil {
-		app.skipStream = true
-		os.Remove(renderMarkerPath())
-		logf("ATTENTION: le démarrage précédent a été tué pendant le chargement du texte enrichi -> cette méthode sera évitée")
 	}
 
 	step("DPI + contrôles communs")
@@ -839,38 +836,14 @@ func (a *App) loadRich(rtf string) int {
 	if rtf == "" {
 		return rmPlain
 	}
-	order := []int{rmSetTextEx, rmStream}
-	if a.skipStream {
-		order = []int{rmSetTextEx}
+	// One method only, tried once: repeatable behaviour matters more than
+	// cleverness here. EM_SETTEXTEX cannot kill the process (no callback into
+	// Go), so either it works or the readable plain text is shown.
+	if a.trySetTextEx(rtf) {
+		return rmSetTextEx
 	}
-	if a.cfg.RenderMode == rmSetTextEx || a.cfg.RenderMode == rmStream {
-		// remembered from a previous run: start with it, then the others
-		order = []int{a.cfg.RenderMode}
-		for _, m := range []int{rmSetTextEx, rmStream} {
-			if m != a.cfg.RenderMode {
-				if m == rmStream && a.skipStream {
-					continue
-				}
-				order = append(order, m)
-			}
-		}
-	}
-	for _, m := range order {
-		var ok bool
-		switch m {
-		case rmSetTextEx:
-			ok = a.trySetTextEx(rtf)
-		case rmStream:
-			ok = a.streamRTF(rtf)
-		}
-		if ok {
-			if a.cfg.RenderMode != m {
-				a.cfg.RenderMode = m
-				saveConfig(a.cfgPath, a.cfg)
-				logf("méthode de rendu retenue: %d", m)
-			}
-			return m
-		}
+	if a.streamAllowed && a.streamRTF(rtf) {
+		return rmStream
 	}
 	return rmPlain
 }
@@ -892,17 +865,9 @@ func (a *App) trySetTextEx(rtf string) (ok bool) {
 	ste := setTextEx{Flags: 0 /* ST_DEFAULT */, Codepage: 1252}
 	r, _, _ := pSendMessageW.Call(a.edit, EM_SETTEXTEX,
 		uintptr(unsafe.Pointer(&ste)), uintptr(unsafe.Pointer(&buf[0])))
-	txt := a.controlText()
-	head := txt
-	if len(head) > 40 {
-		head = head[:40]
-	}
-	if r == 0 || strings.Contains(head, `{\rtf`) || len(txt) < 2 {
-		logf("EM_SETTEXTEX: échec (retour=%d, %d caractères)", r, len(txt))
-		return false
-	}
-	logf("EM_SETTEXTEX: RTF interprété (%d caractères)", len(txt))
-	return true
+	// the return value is the documented success signal for a whole-text set
+	logf("EM_SETTEXTEX -> %d (%d caractères dans le contrôle)", r, len(a.controlText()))
+	return r == 1
 }
 
 // renderMarker is created before streaming and removed afterwards: if it is

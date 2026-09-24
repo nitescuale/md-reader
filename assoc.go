@@ -73,6 +73,10 @@ func loadConfig(path *string) Config {
 	if c.Scale <= 0.3 || c.Scale > 4 {
 		c.Scale = 1
 	}
+	// first run — or an unusable saved geometry — opens maximised
+	if c.W < 500 || c.H < 400 {
+		c.Maximized = true
+	}
 	return c
 }
 

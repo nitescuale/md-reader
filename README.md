@@ -94,15 +94,14 @@ Trois méthodes sont essayées dans l'ordre, de la plus sûre à la plus risqué
 1. **`EM_SETTEXTEX` avec le RTF** — l'API prévue pour remettre du RTF sous forme de chaîne
    (RichEdit le lit avec son lecteur RTF dès que le texte commence par `{\rtf`). Aucun rappel vers
    le code Go : c'est la méthode la plus robuste, et celle utilisée en priorité.
-2. **`EM_STREAMIN`** — la méthode classique, qui passe par un callback. Si la première méthode a
-   échoué, celle-ci est tentée à son tour.
+2. **`EM_STREAMIN`** — la méthode classique, mais elle passe par un callback qui peut tuer le
+   processus sur certains systèmes. Elle n'est **plus tentée automatiquement** : il faut la demander
+   explicitement (`MdReader.exe --stream`).
 3. **Texte brut** — en dernier recours, le document est affiché en texte lisible (sans les marqueurs
    markdown), avec un message dans la barre d'état.
 
-La méthode retenue est mémorisée dans `mdreader.json` (`renderMode`). Et si le programme est tué
-pendant l'étape 2, un marqueur (`mdreader-render.flag`) reste à côté de l'exécutable : au démarrage
-suivant, l'étape 2 est **évitée** au lieu d'être retentée. L'application ne peut donc pas rester
-bloquée deux fois de la même façon.
+Le déroulement est volontairement déterministe : une seule méthode est tentée, une seule fois, donc
+le comportement est identique à chaque lancement.
 
 ### Si rien ne se passe du tout au double-clic
 
@@ -117,3 +116,4 @@ fichier si besoin (clic droit → Propriétés → *Débloquer*).
 - HTML brut dans le markdown : les balises sont retirées, pas interprétées.
 - Windows 10 minimum (manifeste per-monitor v2, contrôles v6).
 - Le thème sombre demande à Windows des menus et une barre de titre sombres (astuce `uxtheme`).
+- La fenêtre s'ouvre en plein écran au premier lancement, puis mémorise sa géométrie.
