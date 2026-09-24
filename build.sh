@@ -1,12 +1,11 @@
-#!/usr/bin/env bash
-# Build MdReader.exe (Windows). Works from Linux/macOS (cross-compilation) and
-# from Windows (Git Bash / WSL). Pure Go: no cgo, no external dependencies.
-set -euo pipefail
-cd "$(dirname "$0")"
-
+#!/bin/sh
+# Construit les trois exécutables Windows (aucun compilateur C nécessaire).
+set -e
+export CGO_ENABLED=0
+LDFLAGS_GUI="-H windowsgui -s -w"
+LDFLAGS_CON="-s -w"
 mkdir -p dist
-export CGO_ENABLED=0 GOOS=windows GOARCH=amd64
-go build -trimpath -ldflags="-H windowsgui -s -w" -o dist/MdReader.exe .
-
-echo "OK -> dist/MdReader.exe"
-ls -l dist/MdReader.exe
+GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS_GUI" -o dist/MdReader.exe .
+GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS_CON" -o dist/MdReader-debug.exe .
+GOOS=windows GOARCH=386 go build -trimpath -ldflags="$LDFLAGS_GUI" -o dist/MdReader-32bit.exe .
+ls -la dist/*.exe

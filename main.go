@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	appVersion = "1.0.0"
+	appVersion = "1.0.1"
 	wndClass   = "MdReaderMainWindow"
 	editClass  = "RICHEDIT50W"
 
@@ -68,6 +69,7 @@ const (
 // ------------------------------------------------------------------- state
 
 type App struct {
+	skipStream bool // EM_STREAMIN a tué le process au démarrage précédent
 	hwnd   HWND
 	edit   HWND
 	status HWND
@@ -149,6 +151,12 @@ func streamOutCB(cookie uintptr, buf uintptr, cb uint32, pcb uintptr) uintptr {
 
 func main() {
 	runtime.LockOSThread()
+	initDiag()
+	defer func() {
+		if r := recover(); r != nil {
+			handlePanic("main", r)
+		}
+	}()
 
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -167,9 +175,17 @@ func main() {
 		}
 	}
 
+	if _, err := os.Stat(renderMarkerPath()); err == nil {
+		app.skipStream = true
+		os.Remove(renderMarkerPath())
+		logf("ATTENTION: le démarrage précédent a été tué pendant le chargement du texte enrichi -> cette méthode sera évitée")
+	}
+
+	step("DPI + contrôles communs")
 	enableDpiAwareness()
 	initCommonControls()
 
+	step("chargement de la configuration")
 	app.cfg = loadConfig(&app.cfgPath)
 	app.themeMode = app.cfg.Theme
 	if app.scale = app.cfg.Scale; app.scale <= 0.3 || app.scale > 4 {
@@ -177,10 +193,24 @@ func main() {
 	}
 	app.dark = resolveDark(app.themeMode)
 
+	step("enregistrement de la classe de fenêtre")
 	registerClass()
+	step("création de la fenêtre")
 	app.createWindow()
+	step("construction des menus")
 	app.buildMenu()
+	step("raccourcis clavier")
 	app.buildAccel()
+
+	// show the window before loading anything: the user must see the app come
+	// up even if the document rendering fails
+	step("affichage de la fenêtre")
+	if app.cfg.Maximized {
+		pShowWindow.Call(app.hwnd, 3 /*SW_SHOWMAXIMIZED*/)
+	} else {
+		pShowWindow.Call(app.hwnd, SW_SHOW)
+	}
+	pUpdateWindow.Call(app.hwnd)
 
 	var file string
 	for _, a := range args {
@@ -190,18 +220,16 @@ func main() {
 		}
 	}
 	if file != "" {
+		step("ouverture de " + file)
 		app.openPath(file)
 	} else {
+		step("écran d'accueil")
 		app.showWelcome()
 	}
 
-	if app.cfg.Maximized {
-		pShowWindow.Call(app.hwnd, 3 /*SW_SHOWMAXIMIZED*/)
-	} else {
-		pShowWindow.Call(app.hwnd, SW_SHOW)
-	}
-	pUpdateWindow.Call(app.hwnd)
+	step("boucle de messages")
 	pSetTimer.Call(app.hwnd, 1, 1500, 0)
+	logf("STARTUP OK")
 	app.messageLoop()
 	app.saveGeometry()
 	saveConfig(app.cfgPath, app.cfg)
@@ -297,6 +325,7 @@ func (a *App) createWindow() {
 func (a *App) createChildren() {
 	// RichEdit
 	h := loadLibrary("Msftedit.dll")
+	logf("Msftedit.dll -> %#x", h)
 	class := editClass
 	if h == 0 {
 		h = loadLibrary("Riched20.dll")
@@ -315,6 +344,7 @@ func (a *App) createChildren() {
 		fatal(fmt.Sprintf("Création du contrôle d'édition impossible: %v", err))
 	}
 	a.edit = r
+	logf("RichEdit -> %#x", r)
 	pSendMessageW.Call(a.edit, emEmptyUndoBuf, 0, 0)
 	pSendMessageW.Call(a.edit, 0x0435 /*EM_EXLIMITTEXT*/, 0, 0x7FFFFFF0)
 	pSendMessageW.Call(a.edit, 0x0452 /*EM_SETUNDOLIMIT*/, 1000, 0)
@@ -344,8 +374,7 @@ func loadLibrary(name string) uintptr {
 }
 
 func fatal(msg string) {
-	pMessageBoxW.Call(0, uintptr(unsafe.Pointer(utf16Ptr(msg))),
-		uintptr(unsafe.Pointer(utf16Ptr("MdReader"))), MB_OK|MB_ICONERROR)
+	fatalDialog("fatal", msg)
 	os.Exit(1)
 }
 
@@ -704,24 +733,154 @@ func (a *App) renderRead() {
 		w = a.px(900)
 	}
 	tw := int(float64(w-2*a.px(18)-a.px(20)) * 1440 / float64(a.dpi()))
-	res := md.Render(a.raw, md.Options{Theme: t, Scale: a.scale, WidthTwips: tw})
+	res, ok := safeRender(a.raw, md.Options{Theme: t, Scale: a.scale, WidthTwips: tw})
+	if !ok {
+		res = md.Result{Text: a.raw}
+	}
 	a.mirror = res.Text
 	a.links = res.Links
 	a.hasTable = strings.Contains(res.RTF, `\trowd`)
 
 	a.busy = true
 	a.setReadOnly(true)
-	gStream = []byte(res.RTF)
+
+	switch a.loadRich(res.RTF) {
+	case rmSetText, rmStream:
+		pSendMessageW.Call(a.edit, emSetModify, 0, 0)
+		pSendMessageW.Call(a.edit, emEmptyUndoBuf, 0, 0)
+		a.applyColors()
+		a.applyLinks()
+	default:
+		// no rich rendering available: stay usable by showing the readable
+		// mirror of the document instead of the raw markdown
+		text := a.mirror
+		if text == "" {
+			text = a.raw
+		}
+		a.setEditorTextValue(text)
+		a.updateStatus("Rendu enrichi indisponible — texte brut (voir mdreader-log.txt)")
+	}
+	a.busy = false
+	logf("renderRead terminé (rtf=%d octets)", len(res.RTF))
+}
+
+// render modes, from the least risky to the most risky
+const (
+	rmPlain   = 0 // plain text, always works
+	rmSetText = 1 // WM_SETTEXT with RTF: no callback into Go
+	rmStream  = 2 // EM_STREAMIN: needs a Go callback
+)
+
+// loadRich tries every way of getting the rich text into the control and
+// remembers the one that works, so a method that kills the process on this
+// machine is never tried twice.
+func (a *App) loadRich(rtf string) int {
+	if rtf == "" {
+		return rmPlain
+	}
+	order := []int{rmSetText, rmStream}
+	if a.skipStream {
+		order = []int{rmSetText}
+	}
+	if a.cfg.RenderMode == rmSetText || a.cfg.RenderMode == rmStream {
+		// remembered from a previous run: start with it, then the others
+		order = []int{a.cfg.RenderMode}
+		for _, m := range []int{rmSetText, rmStream} {
+			if m != a.cfg.RenderMode {
+				if m == rmStream && a.skipStream {
+					continue
+				}
+				order = append(order, m)
+			}
+		}
+	}
+	for _, m := range order {
+		var ok bool
+		switch m {
+		case rmSetText:
+			ok = a.trySetTextRTF(rtf)
+		case rmStream:
+			ok = a.streamRTF(rtf)
+		}
+		if ok {
+			if a.cfg.RenderMode != m {
+				a.cfg.RenderMode = m
+				saveConfig(a.cfgPath, a.cfg)
+				logf("méthode de rendu retenue: %d", m)
+			}
+			return m
+		}
+	}
+	return rmPlain
+}
+
+// trySetTextRTF pushes the RTF through WM_SETTEXT. No callback into Go is
+// involved, so this cannot hit the runtime bug that EM_STREAMIN can.
+func (a *App) trySetTextRTF(rtf string) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("PANIC pendant WM_SETTEXT: %v", r)
+			ok = false
+		}
+	}()
+	pSendMessageW.Call(a.edit, wmSetText, 0, uintptr(unsafe.Pointer(utf16Ptr(rtf))))
+	txt := a.controlText()
+	head := txt
+	if len(head) > 40 {
+		head = head[:40]
+	}
+	if strings.Contains(head, `{\rtf`) {
+		logf("WM_SETTEXT: RTF non interprété (texte brut affiché)")
+		return false
+	}
+	if len(txt) < 2 {
+		logf("WM_SETTEXT: contrôle vide après chargement")
+		return false
+	}
+	logf("WM_SETTEXT: RTF interprété (%d caractères)", len(txt))
+	return true
+}
+
+// renderMarker is created before streaming and removed afterwards: if it is
+// still there at startup, the previous run died inside the rich rendering.
+func renderMarkerPath() string {
+	return filepath.Join(filepath.Dir(logPath), "mdreader-render.flag")
+}
+
+// streamRTF pushes the RTF into the control. It reports false when the control
+// stays empty, which is what happens when the stream could not be parsed.
+func (a *App) streamRTF(rtf string) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("PANIC pendant EM_STREAMIN: %v\n%s", r, debug.Stack())
+			ok = false
+		}
+	}()
+	// the marker is removed on success: if the process dies here, it stays
+	// behind and the next run avoids this method
+	os.WriteFile(renderMarkerPath(), []byte("streaming"), 0o644)
+	gStream = []byte(rtf)
 	gStreamPos = 0
 	es := edStream{PfnCallback: streamInCb}
-	pSendMessageW.Call(a.edit, EM_STREAMIN, SF_RTF, uintptr(unsafe.Pointer(&es)))
+	r, _, _ := pSendMessageW.Call(a.edit, EM_STREAMIN, SF_RTF, uintptr(unsafe.Pointer(&es)))
 	gStream = nil
 	gStreamPos = 0
-	pSendMessageW.Call(a.edit, emSetModify, 0, 0)
-	pSendMessageW.Call(a.edit, emEmptyUndoBuf, 0, 0)
-	a.applyColors()
-	a.applyLinks()
-	a.busy = false
+	logf("EM_STREAMIN -> %d, dwError=%d", r, es.Error)
+	txt := a.controlText()
+	if len(rtf) > 200 && len(txt) < 2 {
+		logf("EM_STREAMIN: contrôle vide, méthode abandonnée")
+		return false
+	}
+	head := txt
+	if len(head) > 40 {
+		head = head[:40]
+	}
+	if strings.Contains(head, `{\rtf`) {
+		logf("EM_STREAMIN: RTF non interprété, méthode abandonnée")
+		return false
+	}
+	os.Remove(renderMarkerPath())
+	return true
 }
 
 func (a *App) setReadOnly(on bool) {
@@ -733,8 +892,14 @@ func (a *App) setReadOnly(on bool) {
 }
 
 func (a *App) setEditorText() {
+	a.setEditorTextValue(a.raw)
+}
+
+// setEditorTextValue displays arbitrary text (used by the plain-text fallback,
+// which shows the readable mirror rather than the markdown source).
+func (a *App) setEditorTextValue(value string) {
 	a.busy = true
-	txt := strings.ReplaceAll(a.raw, "\n", "\r")
+	txt := strings.ReplaceAll(value, "\n", "\r")
 	pSendMessageW.Call(a.edit, wmSetText, 0, uintptr(unsafe.Pointer(utf16Ptr(txt))))
 	pSendMessageW.Call(a.edit, emSetModify, 0, 0)
 	pSendMessageW.Call(a.edit, emEmptyUndoBuf, 0, 0)
@@ -1163,11 +1328,14 @@ func (a *App) buildMenu() {
 	appendMenu(bar, MF_POPUP, file, "&Fichier")
 	appendMenu(bar, MF_POPUP, edit, "&Affichage")
 	appendMenu(bar, MF_POPUP, view, "&Aide")
-	if a.menu != 0 {
-		pDestroyMenu.Call(a.menu)
-	}
+	old := a.menu
 	a.menu = bar
 	pSetMenu.Call(a.hwnd, bar)
+	if old != 0 {
+		// destroy only once detached, otherwise the window keeps a dangling
+		// menu handle
+		pDestroyMenu.Call(old)
+	}
 }
 
 func mustMenu(r uintptr, _ uintptr, _ error) HMENU { return r }
@@ -1539,7 +1707,24 @@ func init() {
 	_ = streamOutCB
 }
 
-func wndProcTrampoline(hwnd HWND, msg uint32, wparam WPARAM, lparam LPARAM) uintptr {
+func wndProcTrampoline(hwnd HWND, msg uint32, wparam WPARAM, lparam LPARAM) (res uintptr) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("PANIC dans la fenêtre (msg=0x%04X): %v\n%s", msg, r, debug.Stack())
+		}
+	}()
 	return app.wndProc(hwnd, msg, wparam, lparam)
+}
+
+// safeRender renders markdown without ever taking the process down.
+func safeRender(src string, opt md.Options) (res md.Result, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("PANIC dans md.Render: %v\n%s", r, debug.Stack())
+			ok = false
+		}
+	}()
+	res = md.Render(src, opt)
+	return res, true
 }
 

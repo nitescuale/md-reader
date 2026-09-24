@@ -75,6 +75,40 @@ Le package `md` est indépendant de Windows et couvert par `go test ./md` :
 échappement RTF, équilibrage des accolades, contenu du texte miroir, positions des liens,
 tableaux, listes imbriquées, cas limites (entrées malformées, emoji, CRLF…).
 
+## Dépannage
+
+L'application écrit un journal de démarrage à côté de l'exécutable : **`mdreader-log.txt`**
+(repli sur `%TEMP%\mdreader-log.txt` si le dossier n'est pas inscriptible). Chaque étape du
+démarrage y est horodatée ; si l'app ne s'ouvre pas, la dernière ligne indique où elle s'est arrêtée.
+
+Il existe deux variantes de l'exécutable :
+
+- `MdReader-debug.exe` — même programme, mais en mode console : une fenêtre de terminal s'ouvre et
+  affiche le journal en direct, ainsi que le message d'erreur éventuel. À utiliser pour diagnostiquer.
+- `MdReader-32bit.exe` — pour un Windows 32 bits.
+
+### Comment le texte est chargé dans la fenêtre (et pourquoi c'est prudent)
+
+Trois méthodes sont essayées dans l'ordre, de la plus sûre à la plus risquée :
+
+1. **`WM_SETTEXT` avec le RTF** — Windows interprète le RTF quand la chaîne commence par `{\rtf`.
+   Aucun rappel vers le code Go : c'est la méthode la plus robuste, et celle utilisée en priorité.
+2. **`EM_STREAMIN`** — la méthode classique, qui passe par un callback. Si la première méthode a
+   échoué, celle-ci est tentée à son tour.
+3. **Texte brut** — en dernier recours, le document est affiché en texte lisible (sans les marqueurs
+   markdown), avec un message dans la barre d'état.
+
+La méthode retenue est mémorisée dans `mdreader.json` (`renderMode`). Et si le programme est tué
+pendant l'étape 2, un marqueur (`mdreader-render.flag`) reste à côté de l'exécutable : au démarrage
+suivant, l'étape 2 est **évitée** au lieu d'être retentée. L'application ne peut donc pas rester
+bloquée deux fois de la même façon.
+
+### Si rien ne se passe du tout au double-clic
+
+L'exécutable n'a alors jamais démarré : vérifier la quarantaine de l'antivirus
+(**Sécurité Windows → Protection contre les virus → Historique des menaces**) et débloquer le
+fichier si besoin (clic droit → Propriétés → *Débloquer*).
+
 ## Limites connues
 
 - Les images sont affichées sous forme de lien cliquable (pas d'affichage inline) — RichEdit n'est pas un moteur de rendu HTML.

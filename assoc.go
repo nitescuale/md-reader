@@ -25,6 +25,10 @@ type Config struct {
 	H         int      `json:"h"`
 	Maximized bool     `json:"maximized"`
 
+	// RenderMode remembers which way of loading the rich text worked on this
+	// machine (see the rm* constants in main.go). 0 = not known yet.
+	RenderMode int `json:"renderMode,omitempty"`
+
 	lastMod int64 `json:"-"`
 }
 
