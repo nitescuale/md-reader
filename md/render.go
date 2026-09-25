@@ -185,7 +185,9 @@ func Render(src string, opt Options) Result {
 	e.header()
 	lines := splitLines(normalize(src))
 	lines = stripFrontMatter(lines)
-	e.blocks(lines, blockCtx{li: opt.PadTwips, ri: opt.PadTwips})
+	// the reading margin is applied by openPar, so the root context starts
+	// empty: adding it here too would count it twice
+	e.blocks(lines, blockCtx{})
 	e.ctrl("}")
 	return Result{RTF: e.sb.String(), Text: string(e.mir), Links: e.links}
 }
