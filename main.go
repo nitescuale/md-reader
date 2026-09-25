@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	appVersion = "1.0.3"
+	appVersion = "1.0.4"
 	wndClass   = "MdReaderMainWindow"
 	editClass  = "RICHEDIT50W"
 
@@ -228,7 +228,7 @@ func main() {
 	}
 
 	step("boucle de messages")
-	pSetTimer.Call(app.hwnd, 1, 1500, 0)
+	pSetTimer.Call(app.hwnd, 1, 4000, 0)
 	logf("STARTUP OK")
 	app.messageLoop()
 	app.saveGeometry()
@@ -349,6 +349,10 @@ func (a *App) createChildren() {
 	pSendMessageW.Call(a.edit, 0x0435 /*EM_EXLIMITTEXT*/, 0, 0x7FFFFFF0)
 	pSendMessageW.Call(a.edit, 0x0452 /*EM_SETUNDOLIMIT*/, 1000, 0)
 	pSendMessageW.Call(a.edit, EM_SETEVENTMASK, 0, ENM_LINK)
+	// simple line breaking: much cheaper to lay out and repaint than the
+	// advanced typography engine, which matters on long documents
+	pSendMessageW.Call(a.edit, emSetTypographyOptions,
+		toAdvancedTypography|toSimpleLineBreak, toSimpleLineBreak)
 
 	// status bar
 	sr, _, _ := pCreateWindowExW.Call(0,
@@ -962,6 +966,10 @@ func (a *App) applyBodyFormat() {
 const (
 	emSetTextEx = 0x0461 // EM_SETTEXTEX
 	emSetMargins = 0x00D3 // EM_SETMARGINS
+	// EM_SETTYPOGRAPHYOPTIONS = WM_USER + 202
+	emSetTypographyOptions = 0x04CA
+	toAdvancedTypography   = 0x0001
+	toSimpleLineBreak      = 0x0002
 )
 
 // applyMargins sets the left/right inner margin of the control, in pixels.

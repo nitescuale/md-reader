@@ -227,18 +227,32 @@ type pstyle struct {
 	bcolor int
 }
 
+// openCellPar writes a minimal paragraph format for a table cell: \plain resets
+// the character state, then the cell's font, size and colour are set.
+func (e *emitter) openCellPar(size int, bold bool, align string) {
+	e.ctrl(`\pard\plain` + align + `\f` + itoa(fontUI) + `\fs` + itoa(size) + `\cf` + itoa(cfText) + `\sl240\slmult1`)
+	if bold {
+		e.ctrl(`\b`)
+	}
+	e.ctrl(" ")
+}
+
 func (e *emitter) openPar(p pstyle, ctx blockCtx) {
 	var b strings.Builder
-	b.WriteString(`\pard`)
+	// \plain resets the character state in one control word instead of a
+	// separate reset per attribute
+	b.WriteString(`\pard\plain`)
 	sl := p.sl
 	if sl == 0 {
 		sl = 276
 	}
 	fmt.Fprintf(&b, `\sl%d\slmult1`, sl)
-	if li := p.li + ctx.li; li > 0 {
+	// the reading margin is ADDED to every block's own indent, never replaced,
+	// otherwise lists and quotes jump outside the text column
+	if li := p.li + ctx.li + e.opt.PadTwips; li > 0 {
 		fmt.Fprintf(&b, `\li%d`, li)
 	}
-	if ri := p.ri + ctx.ri; ri > 0 {
+	if ri := p.ri + ctx.ri + e.opt.PadTwips; ri > 0 {
 		fmt.Fprintf(&b, `\ri%d`, ri)
 	}
 	if p.fi != 0 {
@@ -868,14 +882,11 @@ func (e *emitter) table(lines []string, start int, ctx blockCtx) int {
 	if width < 2000 {
 		width = 2000
 	}
-	if li := ctx.li; li > 0 {
-		width -= li
-	}
-	if width < 1500 {
-		width = 1500
-	}
+	// the table starts at the reading margin and \cellx values are absolute
+	// positions: they must start there too, or the first cells collapse
+	base := ctx.li + e.opt.PadTwips
 	xs := make([]int, n)
-	acc := 0
+	acc := base
 	for c := 0; c < n; c++ {
 		w := width * weights[c] / total
 		if w < 700 {
@@ -891,7 +902,7 @@ func (e *emitter) table(lines []string, start int, ctx blockCtx) int {
 		`\clbrdrr\brdrs\brdrw5\brdrcf` + itoa(cfBorder)
 
 	emitRow := func(cells []string, isHeader bool) {
-		e.ctrl(`\trowd\trgaph120\trleft` + itoa(ctx.li) + `\trbrdrt\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
+		e.ctrl(`\trowd\trgaph120\trleft` + itoa(base) + `\trbrdrt\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
 			`\trbrdrl\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
 			`\trbrdrb\brdrs\brdrw5\brdrcf` + itoa(cfBorder) +
 			`\trbrdrr\brdrs\brdrw5\brdrcf` + itoa(cfBorder) + "\n")
@@ -919,9 +930,10 @@ func (e *emitter) table(lines []string, start int, ctx blockCtx) int {
 			case 'r':
 				align = `\qr`
 			}
-			p := pstyle{font: fontUI, size: e.sz(20), color: cfText, sa: 60, sb: 60, bold: isHeader}
-			e.openPar(p, ctx)
-			e.ctrl(`\intbl` + align + ` `)
+			// lean paragraph for cells: a short format instead of the full
+			// paragraph properties, which made the RTF of table-heavy
+			// documents several times bigger (and slow to lay out)
+			e.openCellPar(e.sz(20), isHeader, align)
 			if txt != "" {
 				e.inline(txt, istyle{bold: isHeader})
 			}
